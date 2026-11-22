@@ -32,7 +32,7 @@ PLANTED = {
 FROM_MAC = "The other computer's sign-ins are added from the Mac with lifeline computer add, adopt and resign."
 
 FAKE_LOGIN = r'''
-import http.server, json, os, subprocess, sys, time
+import http.server, json, os, socketserver, subprocess, sys, time
 from urllib.parse import parse_qs, urlencode, urlsplit
 
 mode = os.environ.get("FAKE_MODE", "ok")
@@ -83,7 +83,13 @@ class Handler(http.server.BaseHTTPRequestHandler):
         done["ok"] = True
 
 
-server = http.server.HTTPServer(("127.0.0.1", 0), Handler)
+class Quick(http.server.HTTPServer):
+    def server_bind(self):  # HTTPServer looks up the host name, which stalls for a minute on macOS runners
+        socketserver.TCPServer.server_bind(self)
+        self.server_port = self.server_address[1]
+
+
+server = Quick(("127.0.0.1", 0), Handler)
 port = server.server_address[1]
 host = "evil.example" if mode == "bad_page" else "claude.com"
 url = "https://" + host + "/cai/oauth/authorize?" + urlencode(
