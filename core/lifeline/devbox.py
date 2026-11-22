@@ -873,6 +873,10 @@ class CallbackRelay:
             open_now, self._open = list(self._open), set()
         for listener in servers:
             try:
+                listener.shutdown(socket.SHUT_RDWR)  # Linux keeps a listener open while accept() waits, unless shut down
+            except OSError:
+                pass
+            try:
                 listener.close()
             except OSError:
                 pass

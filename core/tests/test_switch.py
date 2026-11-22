@@ -2309,6 +2309,7 @@ class FailureTests(unittest.TestCase):
         self.assertIsNone(env.parked(ALEX))
         self.assertEqual(env.parked(WORK), env.signins[WORK])
 
+    @unittest.skipUnless(hasattr(os.stat_result, "st_birthtime"), "Linux has no file birth time, so a lock folder rebuilt with the same inode number looks unchanged.")
     def test_failure_a_compromised_lock_stops_before_writing(self):
         env = Env(self)
         json_lock = env.home / ".claude.json.lock"

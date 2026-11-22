@@ -1161,10 +1161,10 @@ class ServeTests(unittest.TestCase):
         stale = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         stale.bind(world.socket_path)
         stale.close()
-        before = os.lstat(world.socket_path).st_ino
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as probe, self.assertRaises(ConnectionRefusedError):
+            probe.connect(world.socket_path)
         world.run(world.service())
         self.assertEqual(world.call("GET", "/state")[0], 200)
-        self.assertNotEqual(os.lstat(world.socket_path).st_ino, before)
 
     def test_something_else_at_the_path_is_left_alone(self):
         world = World(self)
@@ -2868,7 +2868,7 @@ class StartFailureTests(unittest.TestCase):
 class ProductionWiringTests(unittest.TestCase):
     def test_factory_wires_the_real_parts_without_touching_them(self):
         world = World(self)
-        with mock.patch.object(server.sys, "platform", "darwin"):
+        with mock.patch.object(server.sys, "platform", "darwin"), mock.patch("platform.system", return_value="Darwin"):
             parts = server.production_parts()
         self.assertEqual(parts.home, world.home)
         self.assertEqual(parts.slot.service, "Claude Code-credentials")

@@ -150,6 +150,7 @@ final class ClipProbe: NSView {
             NotificationCenter.default.removeObserver(self, name: NSView.boundsDidChangeNotification, object: clip)
         }
         clip = found
+        enclosingScrollView?.hasVerticalScroller = false // legacy always-on bars ignore .scrollIndicators(.hidden); the list draws its own
         found.postsBoundsChangedNotifications = true
         NotificationCenter.default.addObserver(self, selector: #selector(moved(_:)), name: NSView.boundsDidChangeNotification, object: found)
     }

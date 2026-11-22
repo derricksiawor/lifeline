@@ -330,6 +330,7 @@ class World:
             watch_session_timeout=2.0,
             open_browser=self.no_browser,
             browser_fn=lambda: "Google Chrome",
+            system="darwin",
         )
         options.update(changes)
         return cli.Wiring(**options)
@@ -1758,7 +1759,7 @@ class HelpAndLauncherTests(unittest.TestCase):
                 raise AssertionError("network")
             raise FileNotFoundError(address)
 
-        with mock.patch.dict(os.environ, {"HOME": str(home), "USER": USER}):
+        with mock.patch.dict(os.environ, {"HOME": str(home), "USER": USER}), mock.patch.object(sys, "platform", "darwin"), mock.patch("platform.system", return_value="Darwin"):
             os.environ.pop("LIFELINE_SOCKET", None)
             wiring = cli.production()
             self.assertIsNone(wiring.service())
