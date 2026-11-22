@@ -1,0 +1,21 @@
+#!/usr/bin/env -S python3 -I -B
+import os
+import sys
+
+if sys.version_info < (3, 13):
+    try:
+        sys.stdout.write("Lifeline needs Python 3.13 or newer, but python3 here is %d.%d.\n" % tuple(sys.version_info[:2]))
+    except Exception:
+        pass
+    sys.exit(0)
+
+code = 0
+try:
+    root = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
+    sys.path.insert(0, os.path.join(root, "core"))
+    from lifeline.statusline import run
+
+    code = run()
+except Exception:
+    code = 0
+sys.exit(code)

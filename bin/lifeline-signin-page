@@ -1,0 +1,43 @@
+#!/usr/bin/env -S python3 -I -B
+import os
+import sys
+
+PLACE_VARIABLE = "LIFELINE_SIGNIN_PAGE"
+PAGE_LIMIT = 8192
+
+
+def main():
+    place = os.environ.get(PLACE_VARIABLE)
+    if not place or len(sys.argv) != 2:
+        return 1
+    page = sys.argv[1]
+    if not page or len(page) > PAGE_LIMIT or not page.isprintable():
+        return 1
+    folder, name = os.path.split(place)
+    temp = os.path.join(folder or ".", ".%s.%d" % (name, os.getpid()))
+    try:
+        fd = os.open(temp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+    except OSError:
+        return 1
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(page + "\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.link(temp, place)
+    except OSError:
+        return 1
+    finally:
+        try:
+            os.unlink(temp)
+        except OSError:
+            pass
+    return 0
+
+
+if __name__ == "__main__":
+    try:
+        code = main()
+    except Exception:
+        code = 1
+    sys.exit(code)

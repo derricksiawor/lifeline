@@ -1,0 +1,38 @@
+#!/usr/bin/env -S python3 -I -B
+import os
+import sys
+
+if sys.version_info < (3, 13):
+    try:
+        sys.stderr.write("Lifeline needs Python 3.13 or newer, but python3 here is %d.%d.\n" % tuple(sys.version_info[:2]))
+    except Exception:
+        pass
+    sys.exit(1)
+
+
+def _say(text):
+    try:
+        sys.stderr.write(text + "\n")
+        sys.stderr.flush()
+    except Exception:
+        pass
+
+
+try:
+    root = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
+    sys.path.insert(0, os.path.join(root, "core"))
+    from lifeline.cli import main
+except KeyboardInterrupt:
+    sys.exit(130)
+except Exception:
+    _say("Lifeline could not start because some of its files are missing or damaged.")
+    sys.exit(1)
+
+try:
+    code = main()
+except KeyboardInterrupt:
+    code = 130
+except Exception:
+    _say("Lifeline stopped because of an unexpected problem. Run lifeline status to see where things stand.")
+    code = 1
+sys.exit(code)

@@ -1,0 +1,10 @@
+.claude/
+__pycache__/
+*.pyc
+.build/
+.env
+.DS_Store
+build/
+.ruff_cache/
+.oss-*.txt
+launch.txt

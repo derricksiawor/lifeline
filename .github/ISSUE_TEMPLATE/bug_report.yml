@@ -1,0 +1,65 @@
+name: Bug report
+description: Something in Lifeline does not work as it should.
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what Lifeline did instead.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to see it
+      placeholder: |
+        1. Open the menu.
+        2. Click Switch on account 2.
+        3. The menu says ...
+    validations:
+      required: true
+  - type: input
+    id: lifeline
+    attributes:
+      label: Lifeline version
+      placeholder: "1.0.0"
+    validations:
+      required: true
+  - type: input
+    id: macos
+    attributes:
+      label: macOS version
+      placeholder: "15.1"
+    validations:
+      required: true
+  - type: input
+    id: claude
+    attributes:
+      label: Claude Code version
+      description: The output of claude --version.
+    validations:
+      required: true
+  - type: dropdown
+    id: computer
+    attributes:
+      label: Other computer
+      options:
+        - None
+        - Linux
+        - Mac
+    validations:
+      required: true
+  - type: textarea
+    id: log
+    attributes:
+      label: Log lines
+      description: Lines from ~/Library/Logs/com.example.lifeline/lifeline.log, or the folder named after your bundle id.
+      render: text
+  - type: checkboxes
+    id: private
+    attributes:
+      label: Privacy
+      options:
+        - label: I removed sign-in tokens, keychain contents and emails from everything above.
+          required: true
