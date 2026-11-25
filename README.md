@@ -137,7 +137,7 @@ To stop it, run `bash devbox/install.sh --remove` there. Forget, in the same set
 ## Privacy and security
 
 1. Everything stays on your computers. Lifeline has no telemetry, no account of its own and no server. It talks only to Anthropic, to read each account's profile and use (`api.anthropic.com`) and to renew sign-ins (`platform.claude.com`), and to your paired computer.
-2. Saved sign-ins sit in your login keychain, under a service named from the bundle id. Every keychain call names the login keychain, so a lookup never reaches another keychain. A sign-in never goes on a command line.
+2. Saved sign-ins sit in your login keychain, under a service named from the bundle id. Every keychain call names the login keychain, so a lookup never reaches another keychain. A sign-in goes on a command line only in the one case in Known limits, item 8.
 3. On Linux, saved sign-ins and the pairing key sit in files only your account can read (mode 600) in `~/.config/com.example.lifeline`.
 4. Pairing is signed. The one-time code signs a key exchange, so someone who records the pairing and sees the code later still cannot work out the key. Every request and reply between the two computers is signed with that key, and the other computer refuses anything unsigned, changed, old or repeated.
 5. Lifeline never sends a saved sign-in to the other computer. Each computer keeps its own.
@@ -154,7 +154,7 @@ To report a security problem, see [SECURITY.md](SECURITY.md).
 5. On a Mac used as the other computer, macOS may ask once to let Python read the keychain and accept incoming connections.
 6. Any program you run can read Lifeline's keychain items without a prompt, because macOS trusts `/usr/bin/security`, which made them. Claude Code's own item works the same way.
 7. Some secrets sit in plain files that only your account can read. On Linux these are every saved sign-in and the pairing key. On both systems, a renewed sign-in waits in the data folder until Lifeline settles it. The copies of `~/.claude.json` can hold MCP server secrets too. Backup and sync tools copy all of these, so keep backups encrypted.
-8. When Claude Code's keychain item grows past 4 KB, Lifeline writes it through the Security framework so it never shows on a command line. If the keychain would ask before allowing that write, Lifeline changes nothing and says so.
+8. When Claude Code's keychain item grows past 4 KB, for example with several MCP server sign-ins, it is too long for `security -i`. Lifeline then gives it to `/usr/bin/security` on its command line for the moment of the write, which is what Claude Code does for the same item. A program running as you or as root can see it in that moment. Lifeline 1.0.0 wrote it through the Security framework instead, but macOS then let only Python read the item, so every read by Claude Code asked for your keychain password.
 9. The wording is English only, and times use the 24-hour clock.
 
 ## FAQ

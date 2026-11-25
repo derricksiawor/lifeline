@@ -69,22 +69,16 @@ class FakeSecurity:
                 digits = words[words.index("-X") + 1]
                 self.stored = bytes.fromhex(digits[: len(digits) // 2 * 2]).decode("utf-8", "replace")
             return ""
+        if args[0] == "add-generic-password":
+            if not self.drop_writes:
+                self.stored = bytes.fromhex(args[args.index("-X") + 1]).decode("utf-8")
+            return ""
         if args[0] == "delete-generic-password":
             if self.stored is None:
                 raise SecurityError(args[0], 44, "")
             self.stored = None
             return ""
         raise AssertionError(args)
-
-    def update(self, service, account, data, keychain=None):
-        self.updated = (service, account, data)
-        if self.fail_on and self.fail_on[0] == "update":
-            return self.fail_on[1]
-        if self.stored is None:
-            return slot.NOT_FOUND
-        if not self.drop_writes:
-            self.stored = data.decode("utf-8")
-        return 0
 
 
 class MacKeychainSlotTests(unittest.TestCase):
@@ -235,30 +229,40 @@ class LargeItemTests(unittest.TestCase):
         self.assertFalse(hasattr(fake, "direct"))
         self.assertEqual(json.loads(fake.stored), data)
 
-    def test_item_over_limit_goes_through_the_framework_never_a_command_line(self):
+    def test_item_over_limit_goes_to_security_on_its_command_line_like_claude_code(self):
         fake = FakeSecurity(stored="{}")
         data = padded(4034)
-        with mock.patch.object(slot, "update_item", fake.update):
-            MacKeychainSlot("Lifeline test", "Sam", runner=fake, keychain=KC).write(data)
-        self.assertEqual(fake.updated, ("Lifeline test", "Sam", json.dumps(data, separators=(",", ":")).encode()))
-        self.assertEqual([argv for argv, _ in fake.calls], [["find-generic-password", "-s", "Lifeline test", "-a", "Sam", "-w", KC]])
+        MacKeychainSlot("Lifeline test", "Sam", runner=fake, keychain=KC).write(data)
+        digits = json.dumps(data, separators=(",", ":")).encode().hex()
+        self.assertEqual(
+            [argv for argv, _ in fake.calls],
+            [
+                ["add-generic-password", "-U", "-a", "Sam", "-s", "Lifeline test", "-X", digits, KC],
+                ["find-generic-password", "-s", "Lifeline test", "-a", "Sam", "-w", KC],
+            ],
+        )
         self.assertEqual(json.loads(fake.stored), data)
 
-    def test_a_missing_big_item_is_made_by_security_first_so_claude_code_can_still_read_it(self):
+    def test_a_missing_big_item_is_made_by_the_same_one_security_call(self):
         fake = FakeSecurity()
         data = padded(4034)
-        with mock.patch.object(slot, "update_item", fake.update):
-            MacKeychainSlot("Lifeline test", "Sam", runner=fake, keychain=KC).write(data)
-        made = [stdin for argv, stdin in fake.calls if argv == ["-i"]]
-        self.assertEqual(made, ['add-generic-password -a "Sam" -s "Lifeline test" -w "{}" "/k.keychain"\n'])
+        MacKeychainSlot("Lifeline test", "Sam", runner=fake, keychain=KC).write(data)
+        self.assertEqual([argv[0] for argv, _ in fake.calls], ["add-generic-password", "find-generic-password"])
         self.assertEqual(json.loads(fake.stored), data)
+
+    def test_no_keychain_write_goes_through_python_so_claude_code_never_asks_for_the_password(self):
+        """A Security.framework write from Python leaves the item readable only by Python's signer. Claude Code reads
+        its sign-in through /usr/bin/security every few seconds, and each read then asked for the keychain password."""
+        source = Path(slot.__file__).read_text()
+        for word in ("ctypes", "CDLL", "SecItem"):
+            self.assertNotIn(word, source)
+        self.assertFalse(hasattr(slot, "update_item"))
 
     def test_big_item_with_mcp_sign_ins_round_trips(self):
         fake = FakeSecurity()
         data = signin({"mcpOAuth": {f"s{n}": {"token": "t" * 200} for n in range(30)}})
         slot_ = MacKeychainSlot("Lifeline test", "Sam", runner=fake, keychain=KC)
-        with mock.patch.object(slot, "update_item", fake.update):
-            slot_.write(data)
+        slot_.write(data)
         self.assertEqual(slot_.read(), data)
 
     def test_model_corrupts_if_size_branch_is_removed(self):
@@ -269,16 +273,11 @@ class LargeItemTests(unittest.TestCase):
         self.assertNotEqual(fake.stored, json.dumps(data, separators=(",", ":")))
 
     def test_over_limit_failure_has_no_secret(self):
-        fake = FakeSecurity(stored="{}", fail_on=("update", -25308))
+        fake = FakeSecurity(stored="{}", fail_on=("add-generic-password", 1))
         data = {"claudeAiOauth": {"accessToken": ACCESS}, "pad": "x" * 3000}
-        with mock.patch.object(slot, "update_item", fake.update), self.assertRaises(SlotError) as ctx:
+        with self.assertRaises(SlotError) as ctx:
             MacKeychainSlot("Lifeline test", "Sam", runner=fake, keychain=KC).write(data)
-        self.assertEqual(str(ctx.exception), slot.KEYCHAIN_ASKS)
         self.assertEqual(fake.stored, "{}", "an item that was there is left as it was")
-        fake = FakeSecurity(stored="{}", fail_on=("update", -50))
-        with mock.patch.object(slot, "update_item", fake.update), self.assertRaises(SlotError) as ctx:
-            MacKeychainSlot("Lifeline test", "Sam", runner=fake, keychain=KC).write(data)
-        self.assertEqual(str(ctx.exception), slot.KEYCHAIN_UNSAVED)
         text = str(ctx.exception) + repr(ctx.exception)
         self.assertNotIn(ACCESS, text)
         self.assertNotIn(ACCESS.encode().hex(), text)
@@ -299,9 +298,8 @@ class LargeItemTests(unittest.TestCase):
     "The suite makes no Keychain call; set LIFELINE_LIVE_KEYCHAIN=1 to run these on a throwaway keychain file",
 )
 class ThrowawayKeychainTests(unittest.TestCase):
-    """The real Security.framework write, with prompts off, in a throwaway keychain file made for this test, never the
-    login keychain, Claude Code's item or Lifeline's. Each item is made the way Claude Code makes its own (security, on
-    stdin), and the keychain is deleted afterwards. The search list is checked unchanged."""
+    """The real big write through security, in a throwaway keychain file made for this test, never the login keychain,
+    Claude Code's item or Lifeline's. The keychain is deleted afterwards and the search list is checked unchanged."""
 
     @classmethod
     def setUpClass(cls):
@@ -338,27 +336,18 @@ class ThrowawayKeychainTests(unittest.TestCase):
         self.assertGreater(len(slot._compact(value)), 8000)
         return value
 
-    def test_a_sign_in_as_big_as_claude_codes_is_written_with_prompts_off(self):
+    def test_a_sign_in_as_big_as_claude_codes_is_written_through_security(self):
         self.item.write(signin())
         self.assertIsNotNone(self.held())
         value = self.big()
         self.item.write(value)
         self.assertEqual(self.item.read(), value)
 
-    def test_a_missing_item_is_made_by_security_then_written(self):
+    def test_a_missing_big_item_is_made_by_security(self):
         self.assertIsNone(self.held())
         value = self.big()
         self.item.write(value)
         self.assertEqual(self.item.read(), value)
-
-    def test_the_framework_call_says_when_there_is_no_item(self):
-        self.assertEqual(slot.update_item(self.service, "lifeline-test", b"{}", self.path), slot.NOT_FOUND)
-
-    def test_a_refused_write_leaves_no_placeholder_behind(self):
-        with mock.patch.object(slot, "update_item", side_effect=[slot.NOT_FOUND, slot.ASKS]), self.assertRaises(SlotError) as ctx:
-            self.item.write(self.big())
-        self.assertEqual(str(ctx.exception), slot.KEYCHAIN_ASKS)
-        self.assertIsNone(self.held())
 
 
 class KeychainGuardTests(unittest.TestCase):
@@ -382,15 +371,12 @@ class KeychainGuardTests(unittest.TestCase):
             lambda: store.MacKeychainStore().get(uuid),
             lambda: store.MacKeychainStore().names(),
             lambda: run_security(["delete-generic-password", "-s", "Claude Code-credentials-0123abcd", slot.login_keychain()]),
-            lambda: slot.update_item("Claude Code-credentials", "Sam", b"{}", slot.login_keychain()),
-            lambda: slot.update_item(store.STORE_SERVICE, uuid, b"{}", slot.login_keychain()),
-            lambda: MacKeychainSlot(account="Sam", runner=FakeSecurity()).write(signin({"pad": "x" * 5000})),
+            lambda: MacKeychainSlot(account="Sam").write(signin({"pad": "x" * 5000})),
         )
         with mock.patch.object(slot.subprocess, "run", stand_in), mock.patch.object(slot, "_RUN", stand_in):
-            with mock.patch.object(slot.ctypes, "CDLL", stand_in), mock.patch.object(slot, "_CDLL", stand_in):
-                for call in calls:
-                    with self.assertRaises(slot.KeychainGuard):
-                        call()
+            for call in calls:
+                with self.assertRaises(slot.KeychainGuard):
+                    call()
         self.assertEqual(reached, [])
 
     def test_a_faked_call_passes_and_a_throwaway_name_without_a_fake_raises_too(self):
@@ -405,16 +391,16 @@ class KeychainGuardTests(unittest.TestCase):
         with mock.patch.object(slot.subprocess, "run", stand_in), mock.patch.object(slot, "_RUN", stand_in):
             with self.assertRaises(slot.KeychainGuard):
                 MacKeychainSlot("Lifeline test", "nobody").read()
-        with mock.patch.object(slot.ctypes, "CDLL", stand_in), mock.patch.object(slot, "_CDLL", stand_in):
+        with mock.patch.object(slot.subprocess, "run", stand_in), mock.patch.object(slot, "_RUN", stand_in):
             with self.assertRaises(slot.KeychainGuard):
-                slot.update_item("Lifeline test", "nobody", b"{}", "/k.keychain")
+                MacKeychainSlot("Lifeline test", "nobody").write(signin({"pad": "x" * 5000}))
         self.assertEqual(reached, [])
 
 
 class LoginKeychainOnlyTests(unittest.TestCase):
     """Lifeline names the login keychain in every Keychain call, so a lookup for a missing item never
     reaches another keychain, such as a locked one that would open a password dialog. Nothing here calls the real
-    Keychain: security is replaced at subprocess, and the framework call is caught before it runs."""
+    Keychain: security is replaced at subprocess."""
 
     def test_every_security_call_names_the_login_keychain(self):
         from lifeline import enroll
@@ -432,6 +418,9 @@ class LoginKeychainOnlyTests(unittest.TestCase):
             if args[0] == "dump-keychain":
                 return subprocess.CompletedProcess(argv, 0, "", "")
             found = (args[args.index("-s") + 1], args[args.index("-a") + 1] if "-a" in args else None)
+            if args[0] == "add-generic-password":
+                keychain[found] = bytes.fromhex(args[args.index("-X") + 1]).decode()
+                return subprocess.CompletedProcess(argv, 0, "", "")
             if found not in keychain:
                 return subprocess.CompletedProcess(argv, 44, "", "not found")
             if args[0] == "delete-generic-password":
@@ -439,25 +428,14 @@ class LoginKeychainOnlyTests(unittest.TestCase):
                 return subprocess.CompletedProcess(argv, 0, "", "")
             return subprocess.CompletedProcess(argv, 0, keychain[found] + "\n", "")
 
-        places = []
-
-        def update(service, account, data, where):
-            places.append(where)
-            if (service, account) not in keychain:
-                return slot.NOT_FOUND
-            keychain[(service, account)] = data.decode()
-            return 0
-
         uuid = "3f2b8c1e-aaaa-4bbb-8ccc-0123456789ab"
-        with mock.patch.object(slot.subprocess, "run", run), mock.patch.object(slot, "update_item", update):
+        with mock.patch.object(slot.subprocess, "run", run):
             item = MacKeychainSlot(account="Sam")
             item.read()
             item.write(signin())
             item.write(signin({"pad": "x" * 5000}))
             item.read()
-            with mock.patch.object(slot, "update_item", side_effect=[slot.NOT_FOUND, slot.ASKS]) as refused, self.assertRaises(SlotError):
-                MacKeychainSlot(service="Lifeline other", account="Sam").write(signin({"pad": "x" * 5000}))
-            places += [call.args[3] for call in refused.call_args_list]
+            MacKeychainSlot(service="Lifeline other", account="Sam").write(signin({"pad": "x" * 5000}))
             parked = store.MacKeychainStore()
             parked.get(uuid)
             parked.put(uuid, signin()["claudeAiOauth"])
@@ -471,61 +449,13 @@ class LoginKeychainOnlyTests(unittest.TestCase):
                 self.assertTrue(stdin.rstrip("\n").endswith(slot._quote(login)), stdin[:60])
             else:
                 self.assertEqual(argv[-1], login, argv)
-        self.assertEqual(places, [login, login, login])
-
-    @unittest.skipUnless(sys.platform == "darwin", "Security.framework is on the Mac only")
-    def test_the_framework_call_searches_only_the_login_keychain(self):
-        import ctypes
-
-        real = ctypes.CDLL
-        cf = real("/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation")
-        security = real("/System/Library/Frameworks/Security.framework/Security")
-        pointer = ctypes.c_void_p
-        cf.CFDictionaryGetValue.restype = cf.CFArrayGetValueAtIndex.restype = pointer
-        cf.CFDictionaryGetValue.argtypes = [pointer, pointer]
-        cf.CFArrayGetCount.restype = ctypes.c_long
-        cf.CFArrayGetCount.argtypes = [pointer]
-        cf.CFArrayGetValueAtIndex.argtypes = [pointer, ctypes.c_long]
-        seen = {}
-
-        class Caught:
-            _handle = security._handle
-
-            def __getattr__(self, name):
-                return getattr(security, name)
-
-        def update(query, change):
-            listed = cf.CFDictionaryGetValue(query, pointer.in_dll(security, "kSecMatchSearchList").value)
-            paths = []
-            for index in range(cf.CFArrayGetCount(listed) if listed else 0):
-                text = ctypes.create_string_buffer(1024)
-                cf.CFStringGetCString(cf.CFArrayGetValueAtIndex(listed, index), text, 1024, 0x08000100)
-                paths.append(text.value.decode())
-            seen["paths"] = paths
-            return slot.NOT_FOUND
-
-        def opened(path, out):
-            seen["opened"] = path
-            out._obj.value = cf.CFStringCreateWithCString(None, path, 0x08000100)
-            return 0
-
-        cf.CFStringCreateWithCString.restype = pointer
-        cf.CFStringCreateWithCString.argtypes = [pointer, ctypes.c_char_p, ctypes.c_uint32]
-        cf.CFStringGetCString.argtypes = [pointer, ctypes.c_char_p, ctypes.c_long, ctypes.c_uint32]
-        caught = Caught()
-        caught.SecKeychainOpen = opened
-        caught.SecItemUpdate = update
-        caught.SecKeychainSetUserInteractionAllowed = lambda allowed: seen.setdefault("interaction", allowed)
-        with mock.patch.object(ctypes, "CDLL", lambda path: caught if "Security.framework" in path else real(path)):
-            self.assertEqual(slot.update_item("Lifeline test", "nobody", b"{}", slot.login_keychain()), slot.NOT_FOUND)
-        login = slot.login_keychain()
-        self.assertEqual(seen, {"opened": login.encode(), "interaction": False, "paths": [login]})
 
 
 class NoTokenOnACommandLineTests(unittest.TestCase):
-    """Any local user can read a command line with ps, so no Keychain write ever puts a sign-in on one."""
+    """A command line can be read with ps, so a sign-in goes on one only when it is too long for security -i, and then
+    only on security's own, which is how Claude Code writes the same item. Everything that fits goes on stdin."""
 
-    def test_no_keychain_write_puts_a_sign_in_on_a_command_line(self):
+    def test_only_a_sign_in_too_long_for_stdin_goes_on_securitys_command_line(self):
         keychain, seen = {}, []
 
         def run(argv, input=None, **options):
@@ -537,6 +467,9 @@ class NoTokenOnACommandLineTests(unittest.TestCase):
                 keychain[found] = bytes.fromhex(words[words.index("-X") + 1]).decode() if "-X" in words else words[-1]
                 return subprocess.CompletedProcess(argv, 0, "", "")
             found = (args[args.index("-s") + 1], args[args.index("-a") + 1])
+            if args[0] == "add-generic-password":
+                keychain[found] = bytes.fromhex(args[args.index("-X") + 1]).decode()
+                return subprocess.CompletedProcess(argv, 0, "", "")
             if found not in keychain:
                 return subprocess.CompletedProcess(argv, 44, "", "not found")
             if args[0] == "delete-generic-password":
@@ -544,14 +477,8 @@ class NoTokenOnACommandLineTests(unittest.TestCase):
                 return subprocess.CompletedProcess(argv, 0, "", "")
             return subprocess.CompletedProcess(argv, 0, keychain[found] + "\n" if "-w" in args else "attributes\n", "")
 
-        def update(service, account, data, place=None):
-            if (service, account) not in keychain:
-                return slot.NOT_FOUND
-            keychain[(service, account)] = data.decode()
-            return 0
-
         uuid = "3f2b8c1e-aaaa-4bbb-8ccc-0123456789ab"
-        with mock.patch.object(slot.subprocess, "run", run), mock.patch.object(slot, "update_item", update):
+        with mock.patch.object(slot.subprocess, "run", run):
             for size in (10, 3000, 30000):
                 item = signin({"pad": "x" * size})
                 MacKeychainSlot(account="Sam").write(item)
@@ -565,11 +492,14 @@ class NoTokenOnACommandLineTests(unittest.TestCase):
                 parked.get(uuid)
                 parked.remove(uuid)
         self.assertTrue(seen)
+        on_a_command_line = []
         for argv in seen:
-            for word in argv:
-                for token in (ACCESS, REFRESH):
-                    self.assertNotIn(token, word)
-                    self.assertNotIn(token.encode().hex(), word)
+            if any(token.encode().hex() in word or token in word for word in argv for token in (ACCESS, REFRESH)):
+                on_a_command_line.append(argv)
+        self.assertEqual(len(on_a_command_line), 2, "the 3,000 and 30,000 byte writes, never the 10 byte one")
+        for argv in on_a_command_line:
+            self.assertEqual(argv[:2], ["/usr/bin/security", "add-generic-password"])
+            self.assertEqual(argv[argv.index("-s") + 1], "Claude Code-credentials")
 
     def test_no_source_builds_a_keychain_write_as_a_command_line(self):
         found = [
@@ -578,7 +508,7 @@ class NoTokenOnACommandLineTests(unittest.TestCase):
             for number, line in enumerate(path.read_text().splitlines(), 1)
             if '"add-generic-password",' in line or "'add-generic-password'," in line
         ]
-        self.assertEqual(found, [])
+        self.assertEqual([place.split(":")[0] for place in found], ["slot.py"], "only MacKeychainSlot.write, for a sign-in too long for stdin")
 
 
 class RunSecurityTests(unittest.TestCase):

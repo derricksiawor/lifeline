@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.0.1 (2026-11-25)
+
+### Fixed
+
+1. A switch no longer makes macOS ask for your keychain password again and again. When Claude Code's sign-in passed 4 KB, for example with several MCP server sign-ins, Lifeline 1.0.0 wrote it through the Security framework from Python. macOS then let only Python read the item, so every read by Claude Code asked for the password. Lifeline now writes it with `/usr/bin/security`, as Claude Code does. If you saw the prompts on 1.0.0, type the password once and they stop.
+
 ## 1.0.0 (2026-11-22)
 
 The first public release.

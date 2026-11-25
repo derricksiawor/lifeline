@@ -19,7 +19,7 @@ Both test suites run on every push and pull request. The core tests run on Ubunt
 A test must never reach a real keychain item. A test that missed its fake could overwrite your own Claude Code sign-in, so the suite has a guard.
 
 1. `core/tests/__init__.py` turns the guard on for the whole suite.
-2. While it is on, a call to `/usr/bin/security` or to the Security framework that is not faked raises `KeychainGuard` before it reaches the keychain. `KeychainGuard` is not an `Exception`, so no handler in Lifeline can swallow it.
+2. While it is on, a call to `/usr/bin/security` that is not faked raises `KeychainGuard` before it reaches the keychain. `KeychainGuard` is not an `Exception`, so no handler in Lifeline can swallow it.
 3. Fake the runner (see `FakeSecurity` in `core/tests/test_slot.py`), or patch `subprocess.run`. Use a throwaway service name or keychain file, never `Claude Code-credentials` or the app's own service.
 4. The few live keychain tests run only when you set `LIFELINE_LIVE_KEYCHAIN=1`, and only on a throwaway keychain file they create and delete.
 
@@ -29,7 +29,7 @@ A test must never reach a real keychain item. A test that missed its fake could 
 2. Every sentence a person sees is built in the core, in the `*text.py` modules and the route replies. The app only draws what the core sends. Write plain English, one fact per sentence, with times on the 24-hour clock.
 3. No outside packages in the core and no Swift package dependencies in the app.
 4. Lifeline makes network calls only to Anthropic's own routes and to the paired computer. Keep it that way: no telemetry and no other hosts.
-5. Never put a sign-in on a command line, in a log line or in an error message.
+5. Never put a sign-in in a log line or an error message. The one command line a sign-in may go on is `/usr/bin/security`'s, in `MacKeychainSlot.write`, for an item too long for `security -i`. Never write a keychain item through the Security framework from Python: macOS then lets only Python read it, and every read by Claude Code asks for the keychain password.
 
 ## Pull requests
 

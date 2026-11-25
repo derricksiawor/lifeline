@@ -1,4 +1,3 @@
-import ctypes
 import json
 import os
 import subprocess
@@ -10,12 +9,8 @@ SERVICE = "Claude Code-credentials"
 ITEM_NOT_FOUND = 44
 STDIN_LIMIT = 4032
 TIMEOUT_SECONDS = 5
-NOT_FOUND = -25300
-ASKS = -25308
-KEYCHAIN_UNSAVED = "Lifeline could not save the sign-in in the Keychain, so it changed nothing there."
-KEYCHAIN_ASKS = "The Keychain wanted a click before it would save this sign-in, so Lifeline changed nothing there."
 TEST_GUARD = "LIFELINE_TEST_GUARD"
-_RUN, _CDLL, _SECURITY = subprocess.run, ctypes.CDLL, SECURITY_BINARY
+_RUN, _SECURITY = subprocess.run, SECURITY_BINARY
 
 
 class SlotError(Exception):
@@ -74,66 +69,6 @@ def login_keychain():
     """The only keychain Lifeline touches. Naming it in every call keeps a lookup for a missing item out of every other
     keychain, such as a locked one that would open a password dialog."""
     return str(Path.home() / "Library" / "Keychains" / "login.keychain-db")
-
-
-def update_item(service, account, data, keychain):
-    """Sets a Keychain item's data through Security.framework, so a sign-in never sits on a command line that ps can show.
-
-    It turns Keychain prompts off for this whole process. That is right for Lifeline, which never shows a Keychain
-    prompt: a write the Keychain would ask about fails at once with ASKS instead of waiting for a click. The search list
-    holds only the keychain it is given, which is the login keychain outside the tests.
-    """
-    _guard(ctypes.CDLL is not _CDLL)
-    pointer = ctypes.c_void_p
-    security = ctypes.CDLL("/System/Library/Frameworks/Security.framework/Security")
-    cf = ctypes.CDLL("/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation")
-    for call in (cf.CFStringCreateWithCString, cf.CFDataCreate, cf.CFDictionaryCreate, cf.CFArrayCreate):
-        call.restype = pointer
-    cf.CFStringCreateWithCString.argtypes = [pointer, ctypes.c_char_p, ctypes.c_uint32]
-    cf.CFDataCreate.argtypes = [pointer, ctypes.c_char_p, ctypes.c_long]
-    cf.CFDictionaryCreate.argtypes = [pointer, ctypes.POINTER(pointer), ctypes.POINTER(pointer), ctypes.c_long, pointer, pointer]
-    cf.CFArrayCreate.argtypes = [pointer, ctypes.POINTER(pointer), ctypes.c_long, pointer]
-    cf.CFRelease.argtypes = [pointer]
-    security.SecItemUpdate.argtypes = [pointer, pointer]
-    security.SecItemUpdate.restype = ctypes.c_int32
-    security.SecKeychainOpen.argtypes = [ctypes.c_char_p, ctypes.POINTER(pointer)]
-    security.SecKeychainOpen.restype = ctypes.c_int32
-    security.SecKeychainSetUserInteractionAllowed.argtypes = [ctypes.c_bool]
-    owned = []
-
-    def keep(made):
-        if not made:
-            raise MemoryError()
-        owned.append(made)
-        return made
-
-    def name(symbol):
-        return pointer.in_dll(security, symbol).value
-
-    def callbacks(*kinds):
-        return [ctypes.addressof(pointer.in_dll(cf, f"kCFType{kind}CallBacks")) for kind in kinds]
-
-    def table(pairs):
-        keys, values = (pointer * len(pairs))(*[k for k, _ in pairs]), (pointer * len(pairs))(*[v for _, v in pairs])
-        return keep(cf.CFDictionaryCreate(None, keys, values, len(pairs), *callbacks("DictionaryKey", "DictionaryValue")))
-
-    def text(value):
-        return keep(cf.CFStringCreateWithCString(None, value.encode("utf-8"), 0x08000100))
-
-    try:
-        pairs = [(name("kSecClass"), name("kSecClassGenericPassword")), (name("kSecAttrService"), text(service)), (name("kSecAttrAccount"), text(account))]
-        opened = pointer()
-        status = security.SecKeychainOpen(os.fsencode(keychain), ctypes.byref(opened))
-        if status != 0:
-            return status
-        keep(opened.value)
-        pairs.append((name("kSecMatchSearchList"), keep(cf.CFArrayCreate(None, (pointer * 1)(opened.value), 1, *callbacks("Array")))))
-        change = table([(name("kSecValueData"), keep(cf.CFDataCreate(None, data, len(data))))])
-        security.SecKeychainSetUserInteractionAllowed(False)
-        return security.SecItemUpdate(table(pairs), change)
-    finally:
-        for made in owned:
-            cf.CFRelease(made)
 
 
 def _quote(value):
@@ -205,24 +140,14 @@ class MacKeychainSlot(Slot):
         if len(command.encode("utf-8")) <= STDIN_LIMIT:
             self.runner(["-i"], stdin=command)
         else:
-            self._write_large(compact.encode("utf-8"))
+            # Too long for security -i, so it goes on security's command line, as Claude Code writes the same item.
+            # A Security.framework write from Python would hand the item to Python's signer, and every read by
+            # security after it, Claude Code's included, would ask for the login keychain password.
+            self.runner(["add-generic-password", "-U", "-a", self.account, "-s", self.service, "-X", digits, *self._where])
         if self.read() != json.loads(compact):
             raise SlotError(
                 "The Keychain did not hold what was written. Another writer may have changed it."
             )
-
-    def _write_large(self, data):
-        status, made = update_item(self.service, self.account, data, self.keychain), False
-        if status == NOT_FOUND:
-            self.runner(["-i"], stdin=f"add-generic-password -a {_quote(self.account)} -s {_quote(self.service)} -w {_quote('{}')}{self._place}\n")
-            status, made = update_item(self.service, self.account, data, self.keychain), True
-        if status != 0:
-            if made:
-                try:
-                    self.delete()
-                except SecurityError:
-                    pass
-            raise SlotError(KEYCHAIN_ASKS if status == ASKS else KEYCHAIN_UNSAVED)
 
     def delete(self):
         try:
